@@ -21,31 +21,24 @@ class PropertyImage(models.Model):
         return f"{self.property.title} - Image {self.image_order}"
 
 class PropertyListing(models.Model):
-    # Essential Information
     external_id = models.CharField(max_length=64, unique=True)
     listing_url = models.URLField(max_length=1000, unique=True)
     title = models.CharField(max_length=512, blank=True)
     agent_phone = models.CharField(max_length=50, blank=True, default='')
-    
        
-    # Pricing Information
     price = models.CharField(max_length=128, blank=True)
     price_numeric = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     
-    # Property Details
     property_type = models.CharField(max_length=100, blank=True)  # "End of Terrace", "Flat", "House", etc.
     bedrooms = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(0), MaxValueValidator(20)])
     bathrooms = models.IntegerField(null=True, blank=True, validators=[MinValueValidator(0), MaxValueValidator(20)])
     size = models.CharField(max_length=100, blank=True)  # "1,200 sq ft", "Ask agent", etc.
     
-    # Content
     description = models.TextField(blank=True,default='')
     key_features = models.JSONField(default=list, blank=True)  # ["STARTER HOME", "OPEN PLAN", etc.]
     
-    # Dates
     date_added = models.DateField(null=True, blank=True)
     
-    # Scraping Metadata
     scraped_at = models.DateTimeField(auto_now=True)
     last_updated = models.DateTimeField(auto_now_add=True)
     scraping_status = models.CharField(max_length=20, default='pending', choices=[
