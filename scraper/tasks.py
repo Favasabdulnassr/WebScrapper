@@ -4,6 +4,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# celery -A webscraper worker --loglevel=info -P solo
+
+
 @shared_task
 def scrape_properties_task(search_url, max_pages=3):
     logger.info(f"Starting scraping task for: {search_url}")
@@ -14,3 +17,4 @@ def scrape_properties_task(search_url, max_pages=3):
     except Exception as e:
         logger.error(f"Scraping failed: {e}")
         return f"Scraping failed: {str(e)}"
+

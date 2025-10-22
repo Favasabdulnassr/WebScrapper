@@ -13,7 +13,7 @@ def trigger_scraping(request):
     try:
         data = json.loads(request.body)
         search_url = data.get('search_url', 'https://www.rightmove.co.uk/property-for-sale/find.html?searchLocation=London&useLocationIdentifier=true&locationIdentifier=REGION%5E87490&_includeSSTC=on&index=0&sortType=2&channel=BUY&transactionType=BUY&displayLocationIdentifier=London-87490.html&radius=40.0')
-        max_pages = data.get('max_pages', 3)
+        max_pages = data.get('max_pages', 5)
         
         task = scrape_properties_task.delay(search_url, max_pages)
         
