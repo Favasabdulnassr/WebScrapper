@@ -25,7 +25,9 @@ class PropertyListing(models.Model):
     external_id = models.CharField(max_length=64, unique=True)
     listing_url = models.URLField(max_length=1000, unique=True)
     title = models.CharField(max_length=512, blank=True)
+    agent_phone = models.CharField(max_length=50, blank=True, default='')
     
+       
     # Pricing Information
     price = models.CharField(max_length=128, blank=True)
     price_numeric = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)

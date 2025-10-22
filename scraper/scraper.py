@@ -37,7 +37,185 @@ def extract_price_numeric(price_str):
 
 
 # ----------------------------
-# FIXED: Complete property detail page scraping with improved price extraction
+# NEW: Function to extract agent phone number
+# ----------------------------
+def extract_agent_phone(driver):
+    """Extract agent phone number from detail page"""
+    agent_phone = ""
+    
+    try:
+        # Method 1: Try to find and click "Call Agent" or "Call Developer" button
+        call_button_selectors = [
+            "button[data-test='contact-agent-phone']",
+            "button[class*='call']",
+            "a[class*='call']",
+            "button:contains('Call')",
+            "a:contains('Call Agent')",
+            "a:contains('Call Developer')",
+            "[data-testid='call-agent']",
+            "[data-test='call-agent-button']"
+        ]
+        
+        button_found = False
+        for selector in call_button_selectors:
+            try:
+                # Try CSS selector
+                call_buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+                if call_buttons:
+                    for button in call_buttons:
+                        try:
+                            # Click the button to reveal phone number
+                            driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                            time.sleep(0.5)
+                            driver.execute_script("arguments[0].click();", button)
+                            time.sleep(1)
+                            button_found = True
+                            logger.info(f"✅ Clicked call button: {selector}")
+                            break
+                        except:
+                            continue
+                if button_found:
+                    break
+            except:
+                continue
+        
+        # Method 2: Try XPath for buttons with "Call" text
+        if not button_found:
+            try:
+                xpath_selectors = [
+                    "//button[contains(text(), 'Call')]",
+                    "//a[contains(text(), 'Call Agent')]",
+                    "//a[contains(text(), 'Call')]",
+                    "//button[contains(@class, 'call')]"
+                ]
+                
+                for xpath in xpath_selectors:
+                    try:
+                        buttons = driver.find_elements(By.XPATH, xpath)
+                        if buttons:
+                            for button in buttons:
+                                try:
+                                    driver.execute_script("arguments[0].scrollIntoView(true);", button)
+                                    time.sleep(0.5)
+                                    driver.execute_script("arguments[0].click();", button)
+                                    time.sleep(1)
+                                    button_found = True
+                                    logger.info(f"✅ Clicked call button via XPath: {xpath}")
+                                    break
+                                except:
+                                    continue
+                        if button_found:
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                logger.warning(f"XPath button click error: {e}")
+        
+        # Wait for phone number to appear after button click
+        time.sleep(2)
+        
+        # Method 3: Extract phone number from page after button click
+        page_text = driver.find_element(By.TAG_NAME, "body").text
+        
+        # UK phone number patterns
+        phone_patterns = [
+            r'\+44\s?\d{2,4}\s?\d{3,4}\s?\d{4}',  # +44 20 1234 5678
+            r'0\d{2,4}\s?\d{3,4}\s?\d{4}',         # 020 1234 5678
+            r'\d{5}\s?\d{6}',                       # 01234 567890
+            r'\(\d{2,5}\)\s?\d{3,4}\s?\d{4}',      # (020) 1234 5678
+            r'\+44\s?\d{10,11}',                    # +44 2012345678
+            r'0\d{10,11}'                            # 02012345678
+        ]
+        
+        for pattern in phone_patterns:
+            matches = re.findall(pattern, page_text)
+            if matches:
+                # Filter out invalid numbers (like dates or other numeric data)
+                for match in matches:
+                    # Clean the phone number
+                    cleaned = re.sub(r'\s+', ' ', match.strip())
+                    # Check if it looks like a valid UK phone number
+                    digit_count = len(re.sub(r'\D', '', cleaned))
+                    if 10 <= digit_count <= 13:  # Valid UK phone numbers have 10-13 digits
+                        agent_phone = cleaned
+                        logger.info(f"✅ Found agent phone (Pattern): {agent_phone}")
+                        break
+            if agent_phone:
+                break
+        
+        # Method 4: Look for phone number in specific elements
+        if not agent_phone:
+            phone_element_selectors = [
+                "a[href^='tel:']",
+                "span[class*='phone']",
+                "div[class*='phone']",
+                "p[class*='contact']",
+                "[data-testid='phone']",
+                "[data-test='agent-phone']"
+            ]
+            
+            for selector in phone_element_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        if selector.startswith("a[href^='tel:']"):
+                            # Get phone from tel: link
+                            tel_href = elem.get_attribute("href")
+                            if tel_href:
+                                phone_num = tel_href.replace("tel:", "").strip()
+                                phone_num = re.sub(r'\s+', ' ', phone_num)
+                                agent_phone = phone_num
+                                logger.info(f"✅ Found agent phone (tel: link): {agent_phone}")
+                                break
+                        else:
+                            # Get phone from element text
+                            text = elem.text.strip()
+                            for pattern in phone_patterns:
+                                if re.search(pattern, text):
+                                    agent_phone = text
+                                    logger.info(f"✅ Found agent phone (Element text): {agent_phone}")
+                                    break
+                        if agent_phone:
+                            break
+                    if agent_phone:
+                        break
+                except:
+                    continue
+        
+        # Method 5: Search in specific sections (agent/contact info sections)
+        if not agent_phone:
+            try:
+                # Look for agent information containers
+                agent_sections = driver.find_elements(By.CSS_SELECTOR, 
+                    "div[class*='agent'], div[class*='contact'], section[class*='agent'], aside[class*='contact']")
+                
+                for section in agent_sections:
+                    section_text = section.text
+                    for pattern in phone_patterns:
+                        matches = re.findall(pattern, section_text)
+                        if matches:
+                            cleaned = re.sub(r'\s+', ' ', matches[0].strip())
+                            digit_count = len(re.sub(r'\D', '', cleaned))
+                            if 10 <= digit_count <= 13:
+                                agent_phone = cleaned
+                                logger.info(f"✅ Found agent phone (Agent section): {agent_phone}")
+                                break
+                    if agent_phone:
+                        break
+            except Exception as e:
+                logger.warning(f"Agent section search error: {e}")
+        
+        if not agent_phone:
+            logger.warning("⚠️ Agent phone number not found - tried all methods")
+        
+    except Exception as e:
+        logger.error(f"Error extracting agent phone: {e}")
+    
+    return agent_phone
+
+
+# ----------------------------
+# UPDATED: Complete property detail page scraping with agent phone
 # ----------------------------
 def scrape_complete_property_details(driver, property_url):
     """Scrape ALL property information from individual property detail page"""
@@ -66,7 +244,8 @@ def scrape_complete_property_details(driver, property_url):
             'key_features': [],
             'date_added': None,
             'image_urls': [],
-            'listing_url': property_url
+            'listing_url': property_url,
+            'agent_phone': ''  # NEW FIELD
         }
         
         # Get the entire page text for fallback extraction
@@ -90,6 +269,13 @@ def scrape_complete_property_details(driver, property_url):
                 logger.info(f"✅ Found title (fallback): {property_data['title']}")
             except:
                 logger.warning("Could not extract title")
+        
+        # ==========================================
+        # NEW: EXTRACT AGENT PHONE NUMBER
+        # ==========================================
+        agent_phone = extract_agent_phone(driver)
+        if agent_phone:
+            property_data['agent_phone'] = agent_phone
         
         # ==========================================
         # FIXED: PRICE EXTRACTION WITH MULTIPLE METHODS
@@ -394,6 +580,7 @@ def scrape_complete_property_details(driver, property_url):
         logger.info(f"Price Numeric: {property_data['price_numeric'] or '❌ NOT FOUND'}")
         logger.info(f"Bedrooms: {property_data['bedrooms'] or '❌'}")
         logger.info(f"Property Type: {property_data['property_type'] or '❌'}")
+        logger.info(f"Agent Phone: {property_data['agent_phone'] or '❌ NOT FOUND'}")  # NEW
         logger.info(f"Description: {len(property_data['description'])} chars")
         logger.info(f"Key Features: {len(property_data['key_features'])} items")
         logger.info(f"Images: {len(property_data['image_urls'])} URLs")
@@ -421,6 +608,7 @@ def save_property_to_db_simple(property_data):
             logger.info(f"💾 Saving to database...")
             logger.info(f"   Price: {property_data.get('price', 'N/A')}")
             logger.info(f"   Price Numeric: {property_data.get('price_numeric', 'N/A')}")
+            logger.info(f"   Agent Phone: {property_data.get('agent_phone', 'N/A')}")  # NEW
             
             obj, created = PropertyListing.objects.update_or_create(
                 listing_url=property_data["listing_url"],
@@ -433,6 +621,7 @@ def save_property_to_db_simple(property_data):
             logger.info(f"   ID: {obj.id}")
             logger.info(f"   Price DB: {obj.price}")
             logger.info(f"   Price Numeric DB: {obj.price_numeric}")
+            logger.info(f"   Agent Phone DB: {obj.agent_phone}")  # NEW
             
             if image_urls:
                 obj.images.all().delete()
