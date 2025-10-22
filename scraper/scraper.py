@@ -20,13 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 # ----------------------------
-# Utility functions
+# FIXED: Utility function for price extraction
 # ----------------------------
 def extract_price_numeric(price_str):
-    """Convert price string to float"""
+    """Convert price string to float - handles £, commas, and various formats"""
     if not price_str:
         return None
+    
+    # Remove all non-numeric characters except decimal point
     s = re.sub(r"[^\d\.]", "", price_str.replace(",", ""))
+    
     try:
         return float(s) if s else None
     except:
@@ -34,10 +37,8 @@ def extract_price_numeric(price_str):
 
 
 # ----------------------------
-# Complete property detail page scraping
+# FIXED: Complete property detail page scraping with improved price extraction
 # ----------------------------
-# COMPLETE FIXED VERSION - Replace entire scraping section
-
 def scrape_complete_property_details(driver, property_url):
     """Scrape ALL property information from individual property detail page"""
     try:
@@ -61,8 +62,8 @@ def scrape_complete_property_details(driver, property_url):
             'bedrooms': None,
             'bathrooms': None,
             'size': '',
-            'description': '',  # Initialize as empty string, NOT None
-            'key_features': [],  # Initialize as empty list, NOT None
+            'description': '',
+            'key_features': [],
             'date_added': None,
             'image_urls': [],
             'listing_url': property_url
@@ -90,27 +91,122 @@ def scrape_complete_property_details(driver, property_url):
             except:
                 logger.warning("Could not extract title")
         
-        # Extract Price
+        # ==========================================
+        # FIXED: PRICE EXTRACTION WITH MULTIPLE METHODS
+        # ==========================================
+        price_found = False
+        
+        # Method 1: Try common CSS selectors for price
         try:
             price_selectors = [
                 "span._1gfnqJ3Vtd1z40MlC0MzXu span",
-                "[data-testid='price'] span",
-                "span[class*='price']"
+                "span[data-testid='price']",
+                "div[data-testid='price'] span",
+                "span[class*='propertyCard-priceValue']",
+                "p[class*='price']",
+                "div[class*='price'] span",
+                "span.propertyCard-priceValue",
+                "article span[class*='price']"
             ]
             
             for selector in price_selectors:
                 try:
-                    price_element = driver.find_element(By.CSS_SELECTOR, selector)
-                    price_text = price_element.text.strip()
-                    if "£" in price_text:
-                        property_data['price'] = price_text
-                        property_data['price_numeric'] = extract_price_numeric(price_text)
-                        logger.info(f"✅ Found price: {price_text}")
+                    price_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for price_element in price_elements:
+                        price_text = price_element.text.strip()
+                        if price_text and "£" in price_text and len(price_text) > 2:
+                            property_data['price'] = price_text
+                            property_data['price_numeric'] = extract_price_numeric(price_text)
+                            logger.info(f"✅ Found price (Method 1 - {selector}): {price_text}")
+                            price_found = True
+                            break
+                    if price_found:
                         break
                 except:
                     continue
         except Exception as e:
-            logger.warning(f"Error extracting price: {e}")
+            logger.warning(f"Method 1 price extraction error: {e}")
+        
+        # Method 2: Search in page text using regex
+        if not price_found:
+            try:
+                # Look for patterns like "£550,000" or "£1,250,000"
+                price_patterns = [
+                    r'£[\d,]+(?:\.\d{2})?',  # Matches £550,000 or £550,000.00
+                    r'£\s*[\d,]+(?:\.\d{2})?',  # With optional space
+                ]
+                
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, page_text)
+                    if matches:
+                        # Find the most likely price (usually the largest number)
+                        valid_prices = []
+                        for match in matches:
+                            numeric_val = extract_price_numeric(match)
+                            if numeric_val and numeric_val > 10000:  # Reasonable property price
+                                valid_prices.append((match, numeric_val))
+                        
+                        if valid_prices:
+                            # Sort by numeric value and take the first one (usually the main price)
+                            valid_prices.sort(key=lambda x: x[1], reverse=True)
+                            best_price = valid_prices[0]
+                            property_data['price'] = best_price[0]
+                            property_data['price_numeric'] = best_price[1]
+                            logger.info(f"✅ Found price (Method 2 - Regex): {best_price[0]}")
+                            price_found = True
+                            break
+            except Exception as e:
+                logger.warning(f"Method 2 price extraction error: {e}")
+        
+        # Method 3: Try XPath for price
+        if not price_found:
+            try:
+                xpath_selectors = [
+                    "//span[contains(text(), '£')]",
+                    "//p[contains(text(), '£')]",
+                    "//div[contains(text(), '£')]"
+                ]
+                
+                for xpath in xpath_selectors:
+                    try:
+                        price_elements = driver.find_elements(By.XPATH, xpath)
+                        for element in price_elements:
+                            text = element.text.strip()
+                            if text and "£" in text and len(text) < 30:  # Avoid long descriptions
+                                numeric_val = extract_price_numeric(text)
+                                if numeric_val and numeric_val > 10000:
+                                    property_data['price'] = text
+                                    property_data['price_numeric'] = numeric_val
+                                    logger.info(f"✅ Found price (Method 3 - XPath): {text}")
+                                    price_found = True
+                                    break
+                        if price_found:
+                            break
+                    except:
+                        continue
+            except Exception as e:
+                logger.warning(f"Method 3 price extraction error: {e}")
+        
+        # Method 4: Look for price in meta tags (Open Graph)
+        if not price_found:
+            try:
+                meta_price = driver.find_elements(By.CSS_SELECTOR, "meta[property='og:price:amount']")
+                if meta_price:
+                    price_content = meta_price[0].get_attribute("content")
+                    if price_content:
+                        property_data['price_numeric'] = float(price_content)
+                        property_data['price'] = f"£{price_content}"
+                        logger.info(f"✅ Found price (Method 4 - Meta): £{price_content}")
+                        price_found = True
+            except Exception as e:
+                logger.warning(f"Method 4 price extraction error: {e}")
+        
+        if not price_found:
+            logger.warning("⚠️ PRICE NOT FOUND - Tried all methods")
+        
+        # ==========================================
+        # END OF FIXED PRICE EXTRACTION
+        # ==========================================
         
         # Extract Property Details from dt/dd structure
         try:
@@ -150,12 +246,9 @@ def scrape_complete_property_details(driver, property_url):
         except Exception as e:
             logger.warning(f"Error extracting property details: {e}")
         
-        # ==========================================
-        # EXTRACT DESCRIPTION - FIXED VERSION
-        # ==========================================
+        # Extract Description
         description_text = ""
         
-        # Method 1: Look for "Description" heading followed by text
         try:
             lines = page_text.split('\n')
             desc_start_idx = -1
@@ -177,64 +270,28 @@ def scrape_complete_property_details(driver, property_url):
                     line_stripped = line.strip()
                     line_lower = line_stripped.lower()
                     
-                    # Stop if we hit another section heading
                     if any(heading in line_lower for heading in stop_headings):
                         logger.info(f"🛑 Stopped at section: {line_stripped}")
                         break
                     
-                    # Add substantial lines
                     if line_stripped and len(line_stripped) > 15:
                         desc_lines.append(line_stripped)
                 
                 if desc_lines:
                     description_text = ' '.join(desc_lines)
-                    logger.info(f"✅ DESCRIPTION METHOD 1 SUCCESS: {len(description_text)} chars")
-                    logger.info(f"   Preview: {description_text[:150]}...")
+                    logger.info(f"✅ DESCRIPTION: {len(description_text)} chars")
         
         except Exception as e:
-            logger.warning(f"Error in description method 1: {e}")
+            logger.warning(f"Error in description extraction: {e}")
         
-        # Method 2: Try specific CSS selectors
-        if not description_text or len(description_text) < 50:
-            try:
-                desc_selectors = [
-                    "div.STw8udCxUaBUMfOOZu0iL",
-                    "[data-testid='description']",
-                    "div[itemprop='description']",
-                    "section div p"
-                ]
-                
-                for selector in desc_selectors:
-                    try:
-                        desc_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        for element in desc_elements:
-                            text = element.text.strip()
-                            if len(text) > 100:
-                                description_text = text
-                                logger.info(f"✅ DESCRIPTION METHOD 2 SUCCESS: {len(text)} chars via {selector}")
-                                logger.info(f"   Preview: {text[:150]}...")
-                                break
-                        if description_text and len(description_text) > 50:
-                            break
-                    except:
-                        continue
-            except Exception as e:
-                logger.warning(f"Error in description method 2: {e}")
-        
-        # CRITICAL: Assign the extracted description
         if description_text:
             property_data['description'] = description_text
-            logger.info(f"✅✅✅ FINAL DESCRIPTION SET: {len(property_data['description'])} chars")
         else:
-            logger.warning("⚠️ NO DESCRIPTION FOUND - Will save empty string")
-            property_data['description'] = ""  # Explicit empty string
+            property_data['description'] = ""
         
-        # ==========================================
-        # EXTRACT KEY FEATURES - FIXED VERSION
-        # ==========================================
+        # Extract Key Features
         features_list = []
         
-        # Method 1: Extract from page text
         try:
             lines = page_text.split('\n')
             features_start_idx = -1
@@ -247,84 +304,37 @@ def scrape_complete_property_details(driver, property_url):
                     break
             
             if features_start_idx > 0:
-                stop_headings = ['description', 'brochures', 'council tax', 'notes', 'property type', 
-                                'bedrooms', 'bathrooms', 'size', 'tenure', 'added on', 'reduced on',
-                                'agent', 'map', 'schools', 'station']
+                stop_headings = ['description', 'brochures', 'council tax', 'notes', 'property type']
                 
                 for line in lines[features_start_idx:]:
                     line_stripped = line.strip()
                     line_lower = line_stripped.lower()
                     
-                    # Stop conditions
                     if not line_stripped:
                         continue
                     if any(heading in line_lower for heading in stop_headings):
-                        logger.info(f"🛑 Stopped features at: {line_stripped}")
                         break
                     
-                    # Valid feature criteria
                     if (5 < len(line_stripped) < 150 and 
                         not line_stripped.isupper() and 
-                        ':' not in line_stripped and
-                        not line_stripped.startswith('£')):
+                        ':' not in line_stripped):
                         features_list.append(line_stripped)
-                        logger.info(f"   + Feature: {line_stripped}")
                 
                 if features_list:
-                    logger.info(f"✅ FEATURES METHOD 1 SUCCESS: {len(features_list)} features")
+                    logger.info(f"✅ KEY FEATURES: {len(features_list)} items")
         
         except Exception as e:
-            logger.warning(f"Error in key features method 1: {e}")
+            logger.warning(f"Error in key features extraction: {e}")
         
-        # Method 2: Try CSS selectors for list items
-        if not features_list or len(features_list) < 2:
-            try:
-                list_selectors = [
-                    "ul._1uI3IvdF5sIuBtRIvKrreQ li",
-                    "[data-testid='key-features'] li",
-                    "ul li"
-                ]
-                
-                for selector in list_selectors:
-                    try:
-                        feature_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                        
-                        if len(feature_elements) >= 3:
-                            temp_features = []
-                            for element in feature_elements:
-                                text = element.text.strip()
-                                if (text and 5 < len(text) < 150 and
-                                    not any(nav_word in text.lower() for nav_word in 
-                                           ['buy', 'rent', 'sold', 'commercial', 'mortgages', 
-                                            'agent', 'search', 'house prices'])):
-                                    temp_features.append(text)
-                                    logger.info(f"   + Feature (CSS): {text}")
-                            
-                            if len(temp_features) >= 3:
-                                features_list = temp_features[:20]
-                                logger.info(f"✅ FEATURES METHOD 2 SUCCESS: {len(features_list)} features")
-                                break
-                    except:
-                        continue
-            
-            except Exception as e:
-                logger.warning(f"Error in key features method 2: {e}")
-        
-        # CRITICAL: Assign the extracted features
         if features_list:
             property_data['key_features'] = features_list
-            logger.info(f"✅✅✅ FINAL KEY FEATURES SET: {len(property_data['key_features'])} items")
-            for idx, feat in enumerate(property_data['key_features'][:5], 1):
-                logger.info(f"      {idx}. {feat}")
         else:
-            logger.warning("⚠️ NO KEY FEATURES FOUND - Will save empty list")
-            property_data['key_features'] = []  # Explicit empty list
+            property_data['key_features'] = []
         
         # Extract Date Added
         try:
             date_patterns = [
                 r'(?:Added on|Reduced on)\s+(\d{2}/\d{2}/\d{4})',
-                r'(?:added on|reduced on)\s+(\d{2}/\d{2}/\d{4})',
             ]
             
             for pattern in date_patterns:
@@ -344,7 +354,6 @@ def scrape_complete_property_details(driver, property_url):
         
         # Extract Images
         try:
-            # Try meta tags first
             try:
                 meta_images = driver.find_elements(By.CSS_SELECTOR, "meta[property='og:image']")
                 for meta in meta_images:
@@ -354,7 +363,6 @@ def scrape_complete_property_details(driver, property_url):
             except:
                 pass
             
-            # Then try img tags
             image_selectors = [
                 "img[src*='rightmove']",
                 "img[src*='media']",
@@ -380,19 +388,14 @@ def scrape_complete_property_details(driver, property_url):
         
         # Final validation log
         logger.info(f"=" * 60)
-        logger.info(f"EXTRACTION SUMMARY (PRE-SAVE):")
-        logger.info(f"Title: {property_data['title'][:50] if property_data['title'] else '❌ NOT FOUND'}")
+        logger.info(f"EXTRACTION SUMMARY:")
+        logger.info(f"Title: {property_data['title'][:50] if property_data['title'] else '❌'}")
         logger.info(f"Price: {property_data['price'] or '❌ NOT FOUND'}")
-        logger.info(f"Bedrooms: {property_data['bedrooms'] or '❌ NOT FOUND'}")
-        logger.info(f"Bathrooms: {property_data['bathrooms'] or '❌ NOT FOUND'}")
-        logger.info(f"Property Type: {property_data['property_type'] or '❌ NOT FOUND'}")
-        logger.info(f"Size: {property_data['size'] or '❌ NOT FOUND'}")
-        logger.info(f"Description TYPE: {type(property_data['description'])}")
-        logger.info(f"Description LENGTH: {len(property_data['description'])} chars")
-        logger.info(f"Description PREVIEW: {property_data['description'][:100] if property_data['description'] else 'EMPTY'}")
-        logger.info(f"Key Features TYPE: {type(property_data['key_features'])}")
-        logger.info(f"Key Features COUNT: {len(property_data['key_features'])} items")
-        logger.info(f"Key Features CONTENT: {property_data['key_features'][:3] if property_data['key_features'] else 'EMPTY LIST'}")
+        logger.info(f"Price Numeric: {property_data['price_numeric'] or '❌ NOT FOUND'}")
+        logger.info(f"Bedrooms: {property_data['bedrooms'] or '❌'}")
+        logger.info(f"Property Type: {property_data['property_type'] or '❌'}")
+        logger.info(f"Description: {len(property_data['description'])} chars")
+        logger.info(f"Key Features: {len(property_data['key_features'])} items")
         logger.info(f"Images: {len(property_data['image_urls'])} URLs")
         logger.info(f"=" * 60)
         
@@ -406,60 +409,31 @@ def scrape_complete_property_details(driver, property_url):
 
 
 def save_property_to_db_simple(property_data):
-    """Fixed database save function"""
+    """Save property data to database"""
     try:
         if not property_data.get("listing_url"):
             logger.error("No listing URL provided")
             return False
 
         with transaction.atomic():
-            # Remove image_urls for separate processing
             image_urls = property_data.pop("image_urls", [])
             
-            # CRITICAL: Verify data BEFORE saving
-            description = property_data.get('description', '')
-            key_features = property_data.get('key_features', [])
+            logger.info(f"💾 Saving to database...")
+            logger.info(f"   Price: {property_data.get('price', 'N/A')}")
+            logger.info(f"   Price Numeric: {property_data.get('price_numeric', 'N/A')}")
             
-            logger.info(f"=" * 60)
-            logger.info(f"💾 PRE-SAVE VERIFICATION:")
-            logger.info(f"   Description type: {type(description)}")
-            logger.info(f"   Description length: {len(description)}")
-            logger.info(f"   Description value: '{description[:100]}...' " if description else "   Description: EMPTY")
-            logger.info(f"   Key features type: {type(key_features)}")
-            logger.info(f"   Key features count: {len(key_features)}")
-            logger.info(f"   Key features value: {key_features[:3]}" if key_features else "   Key features: EMPTY LIST")
-            
-            # Ensure proper types (should already be correct from extraction)
-            if not isinstance(description, str):
-                description = str(description) if description else ''
-                property_data['description'] = description
-                
-            if not isinstance(key_features, list):
-                key_features = list(key_features) if key_features else []
-                property_data['key_features'] = key_features
-            
-            # Create or update the property
             obj, created = PropertyListing.objects.update_or_create(
                 listing_url=property_data["listing_url"],
                 defaults=property_data,
             )
             
-            # Force refresh from database
             obj.refresh_from_db()
             
-            # Verify what was actually saved
-            logger.info(f"=" * 60)
-            logger.info(f"✅ POST-SAVE VERIFICATION:")
+            logger.info(f"✅ SAVED TO DATABASE:")
             logger.info(f"   ID: {obj.id}")
-            logger.info(f"   Title: {obj.title}")
-            logger.info(f"   Description DB type: {type(obj.description)}")
-            logger.info(f"   Description DB length: {len(obj.description) if obj.description else 0}")
-            logger.info(f"   Description DB preview: '{obj.description[:100]}...'" if obj.description else "   Description DB: EMPTY")
-            logger.info(f"   Key features DB type: {type(obj.key_features)}")
-            logger.info(f"   Key features DB count: {len(obj.key_features) if obj.key_features else 0}")
-            logger.info(f"   Key features DB value: {obj.key_features[:3]}" if obj.key_features else "   Key features DB: EMPTY")
+            logger.info(f"   Price DB: {obj.price}")
+            logger.info(f"   Price Numeric DB: {obj.price_numeric}")
             
-            # Save images
             if image_urls:
                 obj.images.all().delete()
                 for i, image_url in enumerate(image_urls):
@@ -472,19 +446,8 @@ def save_property_to_db_simple(property_data):
                             image_title=f"Image {i + 1}"
                         )
                 logger.info(f"   Images saved: {len(image_urls)}")
-            
-            # Final fresh query verification
-            verify_obj = PropertyListing.objects.get(id=obj.id)
-            logger.info(f"=" * 60)
-            logger.info(f"🔍 FRESH QUERY VERIFICATION:")
-            logger.info(f"   Description exists: {bool(verify_obj.description)}")
-            logger.info(f"   Description chars: {len(verify_obj.description) if verify_obj.description else 0}")
-            logger.info(f"   Key features exists: {bool(verify_obj.key_features)}")
-            logger.info(f"   Key features items: {len(verify_obj.key_features) if verify_obj.key_features else 0}")
-            logger.info(f"   Key features data: {verify_obj.key_features}")
-            logger.info(f"=" * 60)
                         
-        logger.info(f"{'✅ NEW PROPERTY' if created else '🔄 UPDATED'}: {property_data.get('title', 'Unknown')}")
+        logger.info(f"{'✅ NEW' if created else '🔄 UPDATED'}: {property_data.get('title', 'Unknown')}")
         return created
         
     except Exception as e:
@@ -492,9 +455,8 @@ def save_property_to_db_simple(property_data):
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
-# ----------------------------
-# Get URLs from search results
-# ----------------------------
+
+
 def scrape_property_urls_from_search(search_url, max_pages=2):
     """Get property URLs from search results page"""
     options = Options()
@@ -530,7 +492,6 @@ def scrape_property_urls_from_search(search_url, max_pages=2):
                 except NoSuchElementException:
                     continue
 
-            # Try to go to next page
             if page < max_pages:
                 try:
                     next_button = driver.find_element(By.CSS_SELECTOR, ".pagination-direction--next")
@@ -552,23 +513,18 @@ def scrape_property_urls_from_search(search_url, max_pages=2):
     return property_urls
 
 
-# ----------------------------
-# Main scraping function
-# ----------------------------
 def scrape_properties_from_detail_pages(search_url, max_pages=2):
-    """Main function: Get URLs from search, then scrape each detail page completely"""
+    """Main function: Get URLs from search, then scrape each detail page"""
     logger.info(f"\n{'='*60}")
     logger.info(f"🚀 STARTING RIGHTMOVE SCRAPER")
     logger.info(f"{'='*60}\n")
     
-    # Step 1: Get property URLs
     property_urls = scrape_property_urls_from_search(search_url, max_pages)
     
     if not property_urls:
         logger.error("❌ No property URLs found!")
         return 0
     
-    # Step 2: Scrape each property
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -591,7 +547,6 @@ def scrape_properties_from_detail_pages(search_url, max_pages=2):
             logger.info(f"🔗 URL: {property_url}")
             logger.info(f"{'='*60}")
             
-            # Scrape complete details
             property_data = scrape_complete_property_details(driver, property_url)
             
             if property_data:
@@ -601,7 +556,6 @@ def scrape_properties_from_detail_pages(search_url, max_pages=2):
                 elif result is False:
                     update_count += 1
             
-            # Polite delay
             time.sleep(2)
 
         logger.info(f"\n{'='*60}")
@@ -621,9 +575,6 @@ def scrape_properties_from_detail_pages(search_url, max_pages=2):
     return new_count + update_count
 
 
-# ----------------------------
-# Public function
-# ----------------------------
 def scrape_listing_selenium(url):
     """Public function to scrape Rightmove listings"""
     return scrape_properties_from_detail_pages(url, max_pages=2)
