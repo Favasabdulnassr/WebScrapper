@@ -37,7 +37,7 @@ class PropertyListing(models.Model):
     size = models.CharField(max_length=100, blank=True)  # "1,200 sq ft", "Ask agent", etc.
     
     # Content
-    description = models.TextField(blank=True)
+    description = models.TextField(blank=True,default='')
     key_features = models.JSONField(default=list, blank=True)  # ["STARTER HOME", "OPEN PLAN", etc.]
     
     # Dates
