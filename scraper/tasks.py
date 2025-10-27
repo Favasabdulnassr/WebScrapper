@@ -18,3 +18,4 @@ def scrape_properties_task(search_url, max_pages=3):
         logger.error(f"Scraping failed: {e}")
         return f"Scraping failed: {str(e)}"
 
+

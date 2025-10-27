@@ -434,7 +434,7 @@ def scrape_complete_property_details(driver, property_url):
         
         # Extract Description
         description_text = ""
-        
+
         try:
             lines = page_text.split('\n')
             desc_start_idx = -1
@@ -449,27 +449,32 @@ def scrape_complete_property_details(driver, property_url):
             if desc_start_idx > 0:
                 desc_lines = []
                 stop_headings = ['key features', 'brochures', 'council tax', 'notes', 'staying secure', 
-                                'map', 'nearest stations', 'schools', 'broadband', 'property type', 
-                                'bedrooms', 'bathrooms', 'size', 'tenure', 'features']
+                                'map', 'nearest stations', 'schools', 'broadband', 'tenure', 
+                                'additional information', 'agent', 'property details']
                 
+                # FIXED: Only stop on exact heading matches (short lines that are section headers)
                 for line in lines[desc_start_idx:]:
                     line_stripped = line.strip()
                     line_lower = line_stripped.lower()
                     
-                    if any(heading in line_lower for heading in stop_headings):
-                        logger.info(f"🛑 Stopped at section: {line_stripped}")
-                        break
+                    # Only treat short lines as potential headings (section headers are usually short)
+                    if len(line_stripped) < 50:
+                        # Check if this short line is a stop heading
+                        if any(heading == line_lower or heading in line_lower for heading in stop_headings):
+                            logger.info(f"🛑 Stopped at section heading: {line_stripped}")
+                            break
                     
+                    # Collect description lines (must be substantial text)
                     if line_stripped and len(line_stripped) > 15:
                         desc_lines.append(line_stripped)
                 
                 if desc_lines:
                     description_text = ' '.join(desc_lines)
                     logger.info(f"✅ DESCRIPTION: {len(description_text)} chars")
-        
+
         except Exception as e:
             logger.warning(f"Error in description extraction: {e}")
-        
+
         if description_text:
             property_data['description'] = description_text
         else:
@@ -482,24 +487,28 @@ def scrape_complete_property_details(driver, property_url):
         features_list = []
 
         try:
-            # Method 1: Try to find key features section using CSS selectors
+            # Method 1: Look for the specific UL class from your HTML structure
             try:
-                features_section_selectors = [
-                    "div[class*='keyFeatures']",
-                    "ul[class*='keyFeatures']",
-                    "div[data-testid='keyFeatures']",
-                    "section[class*='features']",
-                    "ul[class*='_2TAjSww98P04t6ly-Kcevy']",  # Common Rightmove class
+                # Try the exact class from your HTML: ul._1uI3IvdF5sIuBtRIvKrreQ
+                feature_selectors = [
+                    "ul._1uI3IvdF5sIuBtRIvKrreQ li",  # Exact class from your HTML
+                    "ul[class*='_1uI3IvdF5sIuBtRIvKrreQ'] li",
+                    "div[class*='keyFeatures'] ul li",
+                    "ul[class*='keyFeatures'] li",
                 ]
                 
-                for selector in features_section_selectors:
+                for selector in feature_selectors:
                     try:
-                        feature_elements = driver.find_elements(By.CSS_SELECTOR, f"{selector} li")
+                        feature_elements = driver.find_elements(By.CSS_SELECTOR, selector)
                         if feature_elements:
                             for elem in feature_elements:
                                 feature_text = elem.text.strip()
-                                if feature_text and 5 < len(feature_text) < 150:
-                                    features_list.append(feature_text)
+                                # Only add if text exists and is meaningful (not just symbols or empty)
+                                if feature_text and len(feature_text) > 2 and len(feature_text) < 150:
+                                    # Skip items that are just symbols or special characters
+                                    if not re.match(r'^[^\w\s]+$', feature_text):
+                                        features_list.append(feature_text)
+                            
                             if features_list:
                                 logger.info(f"✅ Found key features using selector: {selector}")
                                 break
@@ -508,89 +517,37 @@ def scrape_complete_property_details(driver, property_url):
             except Exception as e:
                 logger.warning(f"CSS selector method failed: {e}")
             
-            # Method 2: If Method 1 fails, try extracting from page text
+            # Method 2: If no features found, look for h2 "Key features" and extract following ul
             if not features_list:
-                lines = page_text.split('\n')
-                features_start_idx = -1
-                
-                # Find "Key Features" heading
-                for i, line in enumerate(lines):
-                    line_clean = line.strip().lower()
-                    if 'key features' in line_clean:
-                        features_start_idx = i + 1
-                        logger.info(f"🔍 Found 'Key Features' heading at line {i}")
-                        break
-                
-                if features_start_idx > 0:
-                    # Define stop words more carefully
-                    stop_headings = [
-                        'description', 'property description', 'about this property',
-                        'brochures', 'council tax', 'notes', 'staying secure',
-                        'property information', 'tenure', 'nearest stations',
-                        'map', 'schools', 'broadband', 'agent', 'contact'
-                    ]
-                    
-                    for line in lines[features_start_idx:]:
-                        line_stripped = line.strip()
-                        line_lower = line_stripped.lower()
-                        
-                        # Skip empty lines
-                        if not line_stripped:
-                            continue
-                        
-                        # Stop if we hit another section
-                        if any(heading in line_lower for heading in stop_headings):
-                            logger.info(f"🛑 Stopped at section: {line_stripped}")
-                            break
-                        
-                        # Filter valid feature lines
-                        if (5 < len(line_stripped) < 150 and  # Reasonable length
-                            not line_stripped.startswith('http') and  # Not a URL
-                            not line_stripped.replace('.', '').replace(',', '').isdigit() and  # Not just numbers
-                            not re.match(r'^\d+\s*(bedroom|bathroom|bed|bath)', line_lower)):  # Not property details
-                            
-                            # Clean up the feature text
-                            feature_clean = line_stripped
-                            # Remove bullet points if present
-                            feature_clean = re.sub(r'^[•\-\*]\s*', '', feature_clean)
-                            
-                            if feature_clean:
-                                features_list.append(feature_clean)
-                    
-                    if features_list:
-                        logger.info(f"✅ KEY FEATURES (Text extraction): {len(features_list)} items")
-            
-            # Method 3: Try alternative patterns if still no features found
-            if not features_list:
-                # Look for list items that might be features
                 try:
-                    all_li_elements = driver.find_elements(By.TAG_NAME, "li")
-                    temp_features = []
-                    
-                    for li in all_li_elements:
-                        text = li.text.strip()
-                        parent_class = li.find_element(By.XPATH, "..").get_attribute("class") or ""
-                        
-                        # Check if parent might be a features container
-                        if any(keyword in parent_class.lower() for keyword in ['feature', 'key', 'list']):
-                            if text and 5 < len(text) < 150:
-                                # Clean up
-                                text_clean = re.sub(r'^[•\-\*]\s*', '', text)
-                                if text_clean and text_clean not in temp_features:
-                                    temp_features.append(text_clean)
-                    
-                    if temp_features:
-                        features_list = temp_features
-                        logger.info(f"✅ KEY FEATURES (LI extraction): {len(features_list)} items")
+                    # Find h2 with "Key features" text
+                    h2_elements = driver.find_elements(By.TAG_NAME, "h2")
+                    for h2 in h2_elements:
+                        if "key features" in h2.text.lower():
+                            # Found the heading, now get the next ul element
+                            try:
+                                ul_element = h2.find_element(By.XPATH, "following-sibling::ul[1]")
+                                li_elements = ul_element.find_elements(By.TAG_NAME, "li")
+                                for li in li_elements:
+                                    feature_text = li.text.strip()
+                                    if feature_text and len(feature_text) > 2 and len(feature_text) < 150:
+                                        if not re.match(r'^[^\w\s]+$', feature_text):
+                                            features_list.append(feature_text)
+                                
+                                if features_list:
+                                    logger.info(f"✅ Found key features via h2 + ul navigation")
+                                    break
+                            except:
+                                continue
                 except Exception as e:
-                    logger.warning(f"LI extraction method failed: {e}")
+                    logger.warning(f"h2 navigation method failed: {e}")
 
         except Exception as e:
             logger.warning(f"Error in key features extraction: {e}")
             import traceback
             logger.warning(f"Traceback: {traceback.format_exc()}")
 
-        # Assign to property_data (ensure this line is after all extraction attempts)
+        # Assign to property_data - if no features found, set empty list
         if features_list:
             # Remove duplicates while preserving order
             seen = set()
@@ -606,7 +563,7 @@ def scrape_complete_property_details(driver, property_url):
                 logger.info(f"   {idx}. {feature}")
         else:
             property_data['key_features'] = []
-            logger.warning("⚠️ No key features found")
+            logger.warning("⚠️ No key features found - setting empty list")
         
         # Extract Date Added
         try:
